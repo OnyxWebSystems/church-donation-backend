@@ -1,0 +1,12 @@
+{
+  "indexes": [
+    {
+      "collectionGroup": "donations",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "paystackReference", "order": "ASCENDING" }
+      ]
+    }
+  ],
+  "fieldOverrides": []
+}

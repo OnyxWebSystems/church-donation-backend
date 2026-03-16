@@ -1,13 +1,22 @@
 /**
  * Paystack webhook handler.
  * Verifies signature, processes charge.success, creates donation record only here.
+ * Implements idempotency to prevent duplicate writes.
  */
 import crypto from "crypto";
-import { paystackSecretKey } from "../config/paystack.js";
 import {
   createDonationRecord,
   donationExistsByPaystackReference,
 } from "../services/firebaseService.js";
+import {
+  logWebhookReceived,
+  logSignatureSuccess,
+  logSignatureFailure,
+  logPaymentVerified,
+  logDuplicateTransaction,
+  logFirestoreWriteSuccess,
+  logFirestoreWriteError,
+} from "../utils/logger.js";
 
 const EVENT_CHARGE_SUCCESS = "charge.success";
 
@@ -18,11 +27,16 @@ function koboToRands(kobo) {
 
 /**
  * Verify Paystack webhook signature using HMAC-SHA512.
+ * Uses x-paystack-signature header and process.env.PAYSTACK_SECRET_KEY.
  * Uses raw request body (Buffer) - must be used with express.raw().
  */
 function verifyPaystackSignature(rawBody, signature) {
-  if (!paystackSecretKey || !signature || !rawBody) return false;
-  const hash = crypto.createHmac("sha512", paystackSecretKey).update(rawBody).digest("hex");
+  const secretKey = (process.env.PAYSTACK_SECRET_KEY || "").trim();
+  if (!secretKey || !signature || !rawBody) return false;
+  const hash = crypto
+    .createHmac("sha512", secretKey)
+    .update(rawBody)
+    .digest("hex");
   const bufHash = Buffer.from(hash, "hex");
   const bufSig = Buffer.from(signature, "hex");
   if (bufHash.length !== bufSig.length) return false;
@@ -40,16 +54,23 @@ export async function handlePaystackWebhook(req, res) {
     return res.status(400).json({ success: false, message: "Invalid webhook body" });
   }
 
-  if (!verifyPaystackSignature(rawBody, signature)) {
-    return res.status(401).json({ success: false, message: "Invalid signature" });
-  }
-
   let payload;
   try {
     payload = JSON.parse(rawBody.toString());
   } catch (err) {
     return res.status(400).json({ success: false, message: "Invalid JSON" });
   }
+
+  const reference = payload?.data?.reference
+    ? String(payload.data.reference)
+    : null;
+  logWebhookReceived(reference, payload?.event);
+
+  if (!verifyPaystackSignature(rawBody, signature)) {
+    logSignatureFailure(reference, "Invalid signature");
+    return res.status(401).json({ success: false, message: "Invalid signature" });
+  }
+  logSignatureSuccess(reference);
 
   if (payload.event !== EVENT_CHARGE_SUCCESS) {
     return res.status(200).json({ success: true, message: "Event ignored" });
@@ -65,10 +86,11 @@ export async function handlePaystackWebhook(req, res) {
   try {
     const exists = await donationExistsByPaystackReference(paystackReference);
     if (exists) {
-      return res.status(200).json({ success: true, message: "Donation already recorded (idempotent)" });
+      logDuplicateTransaction(paystackReference);
+      return res.status(200).json({ success: true, message: "Duplicate webhook ignored" });
     }
   } catch (err) {
-    console.error("[Webhook] Idempotency check failed:", err.message);
+    logFirestoreWriteError(paystackReference, err);
     return res.status(500).json({ success: false, message: "Internal error" });
   }
 
@@ -80,25 +102,29 @@ export async function handlePaystackWebhook(req, res) {
     const donation = {
       amount: koboToRands(data.amount),
       currency: data.currency || "ZAR",
-      paystackReference,
-      paystackTransactionId: data.id || null,
+      email: data.customer?.email || null,
+      fullName: name,
+      phone: metadata.phone || null,
       paymentStatus: data.status || null,
       paymentChannel: data.channel || null,
+      cardType: auth.card_type || null,
+      bank: auth.bank || null,
+      country: auth.country_code || null,
+      paystackReference,
+      paystackTransactionId: data.id || null,
       paystackFees: koboToRands(data.fees),
       paidAt: data.paid_at || new Date().toISOString(),
-      fullName: name,
-      email: data.customer?.email || null,
-      phone: metadata.phone || null,
-      businessName: metadata.businessName || null,
-      bank: auth.bank || null,
-      cardType: auth.card_type || null,
-      country: auth.country_code || null,
+      source: "paystack",
+      environment: process.env.NODE_ENV || "development",
     };
 
-    await createDonationRecord(donation);
+    logPaymentVerified(paystackReference);
+
+    const docId = await createDonationRecord(donation);
+    logFirestoreWriteSuccess(paystackReference, docId);
     return res.status(200).json({ success: true, message: "Donation recorded" });
   } catch (err) {
-    console.error("[Webhook] Firestore write failed:", err.message);
+    logFirestoreWriteError(paystackReference, err);
     return res.status(500).json({ success: false, message: "Failed to record donation" });
   }
 }
