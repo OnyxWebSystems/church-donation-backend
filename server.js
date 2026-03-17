@@ -5,6 +5,7 @@ import cors from "cors";
 import donationRoutes from "./routes/donationRoutes.js";
 import webhookRoutes from "./routes/webhookRoutes.js";
 import donationAdminRoutes from "./routes/donationAdminRoutes.js";
+import authRoutes from "./routes/authRoutes.js";
 
 const app = express();
 
@@ -15,6 +16,7 @@ app.use("/api/webhook", express.raw({ type: "application/json" }), webhookRoutes
 
 app.use(express.json());
 
+app.use("/api/auth", authRoutes);
 app.use("/api", donationRoutes);
 app.use("/api", donationAdminRoutes);
 

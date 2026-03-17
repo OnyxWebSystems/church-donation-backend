@@ -41,6 +41,8 @@ Copy `.env.example` to `.env` and configure:
 | `FIREBASE_PRIVATE_KEY` | One of these | Firebase service account private key (use `\n` for newlines) |
 | `PORT` | No | Server port (default: 5000) |
 | `NODE_ENV` | No | `development` or `production` |
+| `JWT_SECRET` | Yes (for admin auth) | Secret used to sign/verify JWTs |
+| `JWT_EXPIRES_IN` | No | JWT expiry (default: `1h`) |
 
 **Firebase credentials** – use one of:
 
@@ -70,6 +72,10 @@ Server runs on `http://localhost:5000` (or `PORT` from `.env`).
 - `GET /api/donations` – List latest 50 donations. Query: `?limit=20` (max 100)
 - `GET /api/donations/:reference` – Get donation by Paystack reference
 - `GET /api/stats` – Returns `totalDonations`, `totalAmount`, `donationCount`
+
+### Auth
+
+- `POST /api/auth/login` – Admin login. Returns `{ token, user }`. Use `Authorization: Bearer TOKEN` for admin endpoints.
 
 ### Health
 
